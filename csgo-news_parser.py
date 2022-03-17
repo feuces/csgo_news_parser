@@ -1,73 +1,73 @@
-import requests
+import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
+import json
+import requests
 import csv
 
 URL = 'https://blog.cs.money'
-
-# Author: feuces
-# Git: https://github.com/feuces
-
 HEADERS = {'user-agent': UserAgent().random}
-PROXIES = {'http': 'PROXIE'}
-
-search_queries = ('Гайды', 'Киберспорт')
 
 
-# Save to CSV table
-def save_csv(items, path):
-    with open(f'{path}.csv', 'w', newline='', encoding='utf-8-sig') as file:
-        writer = csv.writer(file, delimiter=';')
-        writer.writerow(['Название статьи', 'Количество просмотров', 'Дата публикации', 'Ссылка', 'Текст'])
-        for item in items:
-            writer.writerow([item['tittle'], item['views'], item['date'], item['href'], item['text']])
+class NewsParsing:
+    def __init__(self):
+        self.url = None
+        self.proxie = None
+        self.timeout = None
+        self.main_info = []
+        self.all_news = []
 
+    def load_config(self):
+        with open("config.json", encoding='utf=8') as cfg:
+            cfg_json = json.load(cfg)
+            self.proxie = cfg_json['settings']['proxie']
+            self.url = cfg_json['settings']['search_queries']
+            self.timeout = cfg_json['settings']['timeout']
 
-# Get main HTML body
-def get_main_html(url, params=None):
-    r = requests.get(url, headers=HEADERS, proxies=PROXIES, params=params)
-    return r
+    def save_csv(self):
+        with open(f'news.csv', 'w', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file, delimiter=';')
+            writer.writerow(['Title', 'Views', 'Date', 'Url', 'Post', 'Images'])
+            for item in self.main_info:
+                writer.writerow([item['title'], item['views'], item['date'], item['href'], item['text'], item['images']])
 
+    # get news urls
+    def get_all_urls_news(self):
+        for tag in self.url:
+            s = requests.Session()
+            res = s.get(URL, params={'s': tag}, headers=HEADERS, proxies=self.proxie)
+            soup = BeautifulSoup(res.text, 'lxml')
+            urls = soup.select('.card-default[href]')
+            self.all_news.extend([auto.get('href') for auto in soup.select('.card-default[href]')])
+            print(f'{len(urls)} news were found in the "{tag}" category')
 
-# Get links to news
-def get_links(html, key):
-    soup = BeautifulSoup(html.text, 'html.parser')
-    news = soup.find_all('a', class_='card-default')
-    news_links = [{'href': auto.get('href')} for auto in news]
-    print(f'В категории "{key}" найдено {len(news_links)} новостей. Начинаем работу.\n')
-    return news_links
-
-
-# Collecting basic data
-def get_info_news(links):
-    all_news = list()
-    for en, link in enumerate(links, 1):
-        if 'https://blog.cs.money' in link['href']:
-            html = get_main_html(link['href'])
-            soup = BeautifulSoup(html.text, 'html.parser')
+    # get title, views, publish, text, image urls
+    async def pars_info(self, url, session, en):
+        async with session.get(url, proxy=self.proxie['http'], headers=HEADERS) as res:
+            await asyncio.sleep(self.timeout)
+            soup = BeautifulSoup(await res.text(), 'lxml')
+            top_info = soup.find(class_='single__article-top')
+            title = top_info.find(class_='single__article-title').get_text(strip=True)
+            date, views = top_info.find(class_='likes'), top_info.find(class_='views')
             text = [post.get_text(strip=True) for post in soup.select('.single__article > p')]
-            tittle = soup.find('h1', class_='single__article-title').get_text(strip=True)
-            date = soup.find('div', class_='single__article-top').find(class_='likes').get_text(strip=True)
-            views = soup.find('div', class_='single__article-top').find(class_='views').get_text(strip=True)
-            all_news.append(
-                {'href': link['href'], 'tittle': tittle, 'date': date, 'views': views, 'text': '\n\n'.join(text)})
-            print(f'[{en}/{len(links)}] {tittle}')
-    return all_news
+            images_urls = [image.get('href') for image in soup.select('.wp-block-image > a[href]')]
+            print(f'[{en}/{len(self.all_news)}] {title}..\n{url}')
+            self.main_info.append(
+                {'href': url, 'title': title, 'date': date.get_text(strip=True),
+                 'views': views.get_text(strip=True),
+                 'text': '\n\n'.join(text), 'images': '\n'.join(images_urls)})
 
-
-def parsing(keywords):
-    s = requests.Session()
-    s.headers.update(HEADERS)
-    s.proxies.update(PROXIES)
-    html = get_main_html(URL)
-    html.raise_for_status()
-    for key in keywords:
-        html = get_main_html(URL, params={'s': key})
-        links = get_links(html, key)
-        save_csv(get_info_news(links), key)
-        print(f'\nПарсинг статей по запросу "{key}" завершен и был сохранен в файл {key}.csv\n')
+    async def get_data(self):
+        async with aiohttp.ClientSession() as session:
+            tasks = [self.pars_info(tag, session, en) for en, tag in enumerate(self.all_news)]
+            await asyncio.gather(*tasks)
 
 
 if __name__ == '__main__':
-    parsing(search_queries)
-
+    main_parser = NewsParsing()
+    main_parser.load_config()
+    main_parser.get_all_urls_news()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main_parser.get_data())
+    main_parser.save_csv()

@@ -1,0 +1,11 @@
+{
+  "info": {
+	"author": "https://github.com/feuces",
+    "version": 2.0
+  },
+  "settings": {
+    "search_queries": ["Гайды", "Киберспорт"],
+	"proxie": {"http": "http://login:pass@ip:port"},
+	"timeout": 2
+    }
+}
